@@ -28,6 +28,12 @@ fi
 
 mkdir -p temp
 
+echo "Installing/Updating requirements..."
+python3 -m pip install --upgrade pip
+if [[ -f "requirements.txt" ]]; then
+    python3 -m pip install --upgrade -r requirements.txt
+fi
+
 cp -r _${game_names[game_index]}/* temp/
 cp -r engine/ temp/
 cp -r .venv/ temp/

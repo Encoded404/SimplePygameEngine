@@ -1,15 +1,17 @@
 import os
 import zipfile
+import argparse
 
 # List of game names to create individual zip files for
 game_names = [
+    "2DShooter",
     "adventure",
     "pong"
 ]
 
 # Base files that are common to all games
 base_files_to_pack = [
-    ".venv",
+    # Do not include virtual environment (OS-specific). Use requirements.txt instead.
     "requirements.txt",
     "engine" + os.sep + "core.py",
     "engine" + os.sep + "createBackgrounds.py",
@@ -58,6 +60,38 @@ def create_game_zip(game_name):
                 print(f"Warning: Base file \"{item}\" not found")
                 return None
 
+        # Add generated setup scripts for Linux and Windows into the zip
+        linux_setup = """#!/bin/sh
+set -e
+python3 -m venv .venv
+. .venv/bin/activate
+pip install -r requirements.txt
+echo "Setup complete"
+"""
+
+        windows_setup = """@echo off
+python -m venv .venv
+call .venv\\Scripts\\activate
+python -m pip install -r requirements.txt
+echo Setup complete
+"""
+
+        try:
+            from zipfile import ZipInfo
+            import time
+
+            zi = ZipInfo('setup_linux.sh')
+            zi.date_time = tuple(time.localtime()[:6])
+            zi.external_attr = 0o755 << 16  # Unix executable bit
+            zipf.writestr(zi, linux_setup)
+
+            zi = ZipInfo('setup_windows.bat')
+            zi.date_time = tuple(time.localtime()[:6])
+            zi.external_attr = 0o644 << 16
+            zipf.writestr(zi, windows_setup)
+        except Exception as e:
+            print(f"Warning: failed to add generated setup scripts: {e}")
+
         # Check if all required game files exist first (minimum requirements)
         missing_files = []
         for item in game_specific_files:
@@ -90,14 +124,6 @@ def create_game_zip(game_name):
     
     print(f"Created {output_zip_file}")
     return output_zip_file
-
-# Create zip files for all games
-created_zips = []
-for game_name in game_names:
-    zip_file = create_game_zip(game_name)
-    if zip_file:
-        created_zips.append((zip_file, game_name))
-
 
 # look for removable media (like a USB drive) and copy the zip file there
 import shutil
@@ -184,6 +210,45 @@ def copy_zip_to_removable_drive(zip_file, game_name):
     else:
         print("No removable drive found.")
 
-# Copy all created zip files to removable drives
-for zip_file, game_name in created_zips:
-    copy_zip_to_removable_drive(zip_file, game_name)
+def main(argv=None):
+    parser = argparse.ArgumentParser(description="Pack games into zips (non-interactive for CI)")
+    parser.add_argument("--games", nargs="*", help="Games to pack (default: all)", default=None)
+    parser.add_argument("--copy-to", help="Copy zips to this path (non-interactive)")
+    parser.add_argument("--auto-copy-first-drive", action="store_true", help="Auto-copy zips to first removable drive if found")
+    args = parser.parse_args(argv)
+
+    to_pack = args.games if args.games else game_names
+
+    created = []
+    for g in to_pack:
+        z = create_game_zip(g)
+        if z:
+            created.append((z, g))
+
+    if args.copy_to:
+        for zip_file, _ in created:
+            try:
+                shutil.copy(zip_file, args.copy_to)
+                print(f"Copied {zip_file} to {args.copy_to}")
+            except Exception as e:
+                print(f"Error copying {zip_file} to {args.copy_to}: {e}")
+    elif args.auto_copy_first_drive:
+        drives = find_removable_drives()
+        if drives:
+            dest = drives[0]
+            for zip_file, _ in created:
+                try:
+                    shutil.copy(zip_file, dest)
+                    print(f"Copied {zip_file} to {dest}")
+                except Exception as e:
+                    print(f"Error copying {zip_file} to {dest}: {e}")
+        else:
+            print("No removable drive found.")
+    else:
+        # preserve original interactive behavior when no args provided
+        for zip_file, game_name in created:
+            copy_zip_to_removable_drive(zip_file, game_name)
+
+
+if __name__ == "__main__":
+    main()

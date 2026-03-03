@@ -1,4 +1,4 @@
-from engine.core import Core, shapes, TRACK_TYPE
+from engine.core import Core, shapes, TRACK_TYPE, Vector2
 
 # settings
 player_speed = 5
@@ -16,25 +16,25 @@ bounds = (section_size[0] * screen_size, section_size[1] * screen_size)
 core = Core(section_size, screen_size, "game title")
 
 # get middle of screen
-starting_player_pos = [(bounds[0]) / 2 - (player_size / 2), (bounds[1]) / 2 - (player_size / 2)]
+starting_player_pos = Vector2((bounds[0]) / 2 - (player_size / 2), (bounds[1]) / 2 - (player_size / 2))
 
 Core.log_message(f"starting player pos: {starting_player_pos}")
 
-player_obj = core.object(core, shapes.RECTANGLE, (0, 255, 0), starting_player_pos, [player_size,player_size])
+player_obj = core.object(core, shapes.RECTANGLE, (0, 255, 0), starting_player_pos.copy(), [player_size,player_size])
 
 death_list = [
-    core.object(core, shapes.RECTANGLE, (255, 0, 0), [100, 100], [50, 50])
+    core.object(core, shapes.RECTANGLE, (255, 0, 0), Vector2(100, 100), [50, 50])
 ]
 obstacle_color = (50, 50, 50)
 obstacle_list = [
-    core.object(core, shapes.RECTANGLE, obstacle_color, [250, 200], [200, 50]),
-    core.object(core, shapes.ELLIPSE, obstacle_color, [475, 200], [50, 50]),
-    core.object(core, shapes.IMAGE, (255, 0, 0), [600, 300], [50, 50], "swirl.png")
+    core.object(core, shapes.RECTANGLE, obstacle_color, Vector2(250, 200), [200, 50]),
+    core.object(core, shapes.ELLIPSE, obstacle_color, Vector2(475, 200), [50, 50]),
+    core.object(core, shapes.IMAGE, (255, 0, 0), Vector2(600, 300), [50, 50], "swirl.png")
 ]
 
 current_level = 0
-level_pos = [0, 0]
-last_level_info = [0, 0, 0]
+level_pos = Vector2(0, 0)
+last_level_info = [0, Vector2(0, 0)]
 current_background = None
 
 current_health = starting_health
@@ -92,7 +92,7 @@ def GameLoad():
     core.setCameraFollow(player_obj, track_type)
 
     if track_type == TRACK_TYPE.SMOOTH:
-        level_pos = [0.5, 0.5]
+        level_pos = Vector2(0.5, 0.5)
 
     Core.log_message("GameLoad called")
 
@@ -101,18 +101,20 @@ def GameLoad():
 
 def drawBackground(screen, MapPosition: tuple[int, int]):
     global level_pos, current_background, current_level, last_level_info, track_type
-    level_pos = MapPosition
+    level_pos = Vector2(MapPosition)
     screen.fill((30, 30, 30))
 
     if(track_type == TRACK_TYPE.SNAP):
-        if (current_level != last_level_info[0] or level_pos != last_level_info[1:]):
-            current_background = core.loadBackground(current_level, level_pos)
-            last_level_info = (current_level, *level_pos)
-
-    elif(track_type == TRACK_TYPE.SMOOTH):
-        if(current_level != last_level_info[0] or level_pos != last_level_info[1:]):
+        if (current_level != last_level_info[0] or level_pos != last_level_info[1]):
             current_background = core.loadBackground(current_level, level_pos)
             last_level_info[0] = current_level
+            last_level_info[1] = level_pos.copy()
+
+    elif(track_type == TRACK_TYPE.SMOOTH):
+        if(current_level != last_level_info[0] or level_pos != last_level_info[1]):
+            current_background = core.loadBackground(current_level, level_pos)
+            last_level_info[0] = current_level
+            last_level_info[1] = level_pos.copy()
 
     if(current_background != None):
         core.drawBackground(current_background)

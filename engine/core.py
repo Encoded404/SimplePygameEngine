@@ -1,3 +1,5 @@
+from __future__ import annotations
+
 import os
 from queue import Queue
 import pygame
@@ -5,20 +7,146 @@ import math
 from typing import List
 import shutil
 import uuid
+import traceback
+from types import SimpleNamespace
 
 from enum import Enum
 from .createBackgrounds import BackgroundCreator
+
+
+class Vector2:
+    """Lightweight 2D vector for positions, offsets, and movement."""
+
+    __slots__ = ("x", "y")
+
+    def __init__(self, x: float | list[float] | tuple[float, float] | Vector2 = 0.0, y: float | None = None):
+        if y is None and isinstance(x, (Vector2, list, tuple)):
+            self.x, self.y = self._extract_components(x)
+        else:
+            self.x = float(x)
+            self.y = float(x if y is None else y)
+
+    @staticmethod
+    def _extract_components(value: Vector2 | list[float] | tuple[float, float] | float | int) -> tuple[float, float]:
+        if isinstance(value, Vector2):
+            return value.x, value.y
+        if isinstance(value, (list, tuple)):
+            if len(value) < 2:
+                raise ValueError("Vector2 needs at least two values")
+            return float(value[0]), float(value[1])
+        if isinstance(value, (int, float)):
+            scalar = float(value)
+            return scalar, scalar
+        raise TypeError("Cannot extract Vector2 components from value: {}".format(value))
+
+    def copy(self) -> Vector2:
+        return Vector2(self.x, self.y)
+
+    def to_tuple(self) -> tuple[float, float]:
+        return (self.x, self.y)
+
+    def to_list(self) -> list[float]:
+        return [self.x, self.y]
+
+    @property
+    def length(self) -> float:
+        return math.hypot(self.x, self.y)
+
+    @property
+    def length_squared(self) -> float:
+        return self.x * self.x + self.y * self.y
+
+    def normalized(self) -> Vector2:
+        mag = self.length
+        if mag == 0:
+            return Vector2(0.0, 0.0)
+        return Vector2(self.x / mag, self.y / mag)
+
+    def distance_to(self, value: Vector2 | list[float] | tuple[float, float]) -> float:
+        ox, oy = self._extract_components(value)
+        return math.hypot(self.x - ox, self.y - oy)
+
+    def dot(self, vector: Vector2 | list[float] | tuple[float, float]) -> float:
+        ox, oy = self._extract_components(vector)
+        return self.x * ox + self.y * oy
+
+    def __getitem__(self, index: int) -> float:
+        if index == 0:
+            return self.x
+        if index == 1:
+            return self.y
+        raise IndexError("Vector2 index out of range")
+
+    def __setitem__(self, index: int, value: float) -> None:
+        if index == 0:
+            self.x = float(value)
+            return
+        if index == 1:
+            self.y = float(value)
+            return
+        raise IndexError("Vector2 index out of range")
+
+    def __iter__(self):
+        yield self.x
+        yield self.y
+
+    def __len__(self) -> int:
+        return 2
+
+    def __eq__(self, other) -> bool:
+        if not isinstance(other, (Vector2, list, tuple)):
+            return False
+        
+        try:
+            ox, oy = self._extract_components(other)
+        except (TypeError, ValueError):
+            return False
+        
+        return self.x == ox and self.y == oy
+
+    def __repr__(self) -> str:
+        return f"({self.x}, {self.y})"
+
+    def __add__(self, other):
+        if not isinstance(other, (Vector2, list, tuple)):
+            return NotImplemented
+        ox, oy = self._extract_components(other)
+        return Vector2(self.x + ox, self.y + oy)
+
+    def __sub__(self, other):
+        if not isinstance(other, (Vector2, list, tuple)):
+            return NotImplemented
+        ox, oy = self._extract_components(other)
+        return Vector2(self.x - ox, self.y - oy)
+
+    def __neg__(self) -> Vector2:
+        return Vector2(-self.x, -self.y)
+
+    def __mul__(self, scalar: float) -> Vector2:
+        if not isinstance(scalar, (int, float)):
+            raise TypeError("Vector2 multiplication requires a scalar")
+        return Vector2(self.x * scalar, self.y * scalar)
+
+    def __rmul__(self, scalar: float) -> Vector2:
+        return self.__mul__(scalar)
+
+    def __truediv__(self, scalar: float) -> Vector2:
+        if scalar == 0:
+            raise ZeroDivisionError("Cannot divide Vector2 by zero")
+        return Vector2(self.x / scalar, self.y / scalar)
 
 class shapes(Enum):
     RECTANGLE = 1
     ELLIPSE = 2
     IMAGE = 3
+    CUSTOM = 4
 
 class TRACK_TYPE(Enum):
     SNAP = 1
     SMOOTH = 2
 
 shouldDebugCollisions = False
+_MISSING = object()
 
 def drawShape(screen, shape, color, position, size, image: pygame.Surface | None = None, borderConfig: int | None = None):
     extra_offset = (0, 0)
@@ -233,9 +361,19 @@ class Core:
                 continueSearchingLevelImages = False
 
         self.tickrate = 60
+        # list of all created objects (registered in Core.object.__init__)
+        self._objects: list[Core.object] = []
+        # shared state dictionary available to scripts
+        self.shared_state: dict = {}
 
     def run(self, update, mouse_clicked, draw, drawBackground, drawForeground, drawUI, GameLoad):
-        GameLoad()
+        # Allow any of the callbacks to be None or non-callable. Guard calls accordingly.
+        if callable(GameLoad):
+            try:
+                GameLoad()
+            except Exception as e:
+                self.log_message(f"GameLoad raised exception: {e}", True)
+
         while self.running:
             for event in pygame.event.get():
                 if event.type == pygame.QUIT:
@@ -248,28 +386,71 @@ class Core:
                             else:
                                 self.log_message("button was not clicked!")
                     else:
-                        self.log_message("no __buttons attribute")
-                    mouse_clicked(event.pos)
+                        pass
+                        # this means the game has not registered any buttons yet
+                        #self.log_message("no __buttons attribute")
+                    if callable(mouse_clicked):
+                        try:
+                            mouse_clicked(event.pos)
+                        except Exception as e:
+                            self.log_message(f"mouse_clicked raised exception: {e}", True)
 
             self.keys = pygame.key.get_pressed()
             earlyInternalUpdate(self)
-            update()
+            if callable(update):
+                try:
+                    update()
+                except Exception as e:
+                    self.log_message(f"update raised exception: {e}", True)
             lateInternalUpdate(self)
 
+            # Run per-object script updates (iterate over a snapshot to avoid modification during loop)
+            try:
+                for obj in list(Core._get_attr(self, '_objects', [])):
+                    for script in Core._get_attr(obj, 'scripts', []):
+                        if hasattr(script, 'update') and callable(script.update):
+                            try:
+                                script.update(obj)
+                            except Exception as e:
+                                Core._log_script_exception(script, 'script.update', e)
+            except Exception as e:
+                self.log_message(f"object script update loop failed: {e}", True)
+
             global cameraSectionPosition
-            #print("calling drawBackground with cameraSectionPosition: ", cameraSectionPosition)
-            drawBackground(self.screen, cameraSectionPosition)
-            draw(self.screen)
-            
+            # Call rendering callbacks only if provided
+            if callable(drawBackground):
+                try:
+                    drawBackground(self.screen, cameraSectionPosition)
+                except Exception as e:
+                    self.log_message(f"drawBackground raised exception: {e}", True)
+
+            if callable(draw):
+                try:
+                    draw(self.screen)
+                except Exception as e:
+                    self.log_message(f"draw raised exception: {e}", True)
+
             debugDraw(self.screen)
 
-            drawForeground(self.screen)
-            drawUI(self.screen)
+            if callable(drawForeground):
+                try:
+                    drawForeground(self.screen)
+                except Exception as e:
+                    self.log_message(f"drawForeground raised exception: {e}", True)
+
+            if callable(drawUI):
+                try:
+                    drawUI(self.screen)
+                except Exception as e:
+                    self.log_message(f"drawUI raised exception: {e}", True)
 
             pygame.display.flip()
             self.clock.tick(self.tickrate)
 
         pygame.quit()
+
+    def stop(self):
+        self.running = False
 
     def isKeyPressed(self, key_name: str) -> bool:
 
@@ -282,15 +463,17 @@ class Core:
             key_name_final = key_name.lower()
 
         try:
-            key_code = getattr(pygame, f"K_{key_name_final}")
+            key_code = Core._get_attr(pygame, f"K_{key_name_final}")
         except AttributeError:
             raise ValueError(f"Invalid key name: {key_name} (result: {"K_"+key_name_final})")
         return self.keys[key_code]
 
-    def loadBackground(self, level: int, coordinates: list[int] | tuple[int, int] | list[float] | tuple[float, float]):
+    def loadBackground(self, level: int, coordinates: list[int] | tuple[int, int] | list[float] | tuple[float, float] | Vector2):
         # if tracking is in snap mode, simply display the background accosiated with the position
+        coords = coordinates if isinstance(coordinates, Vector2) else Vector2(coordinates if isinstance(coordinates, (list, tuple)) else coordinates)
+        snap_coord = (int(coords.x), int(coords.y))
         if tracking_type == TRACK_TYPE.SNAP:
-            background_path = os.path.join(os.path.dirname(__file__), 'backgrounds', f"{level}_{coordinates[0]}_{coordinates[1]}.png")
+            background_path = os.path.join(os.path.dirname(__file__), 'backgrounds', f"{level}_{snap_coord[0]}_{snap_coord[1]}.png")
             return pygame.transform.scale(_load_image(background_path), pygame.display.get_surface().get_size())
         #if its smooth get the 1-4 backgrounds the camera will cover
         elif tracking_type == TRACK_TYPE.SMOOTH:
@@ -298,8 +481,8 @@ class Core:
 
             # Calculate which tiles we need based on camera position
             # Get the base tile coordinates (floor of the camera position)
-            base_x = math.floor(coordinates[0])
-            base_y = math.floor(coordinates[1])
+            base_x = math.floor(coords.x)
+            base_y = math.floor(coords.y)
 
             global last_loaded_background_info, last_loaded_background
             if(last_loaded_background_info == (base_x, base_y)):
@@ -388,14 +571,23 @@ class Core:
                 self.screen.blit(background, (0, 0))
 
     def checkCollision(self, obj1: 'Core.object', obj2: 'Core.object') -> bool:
-        if obj1.shape == shapes.RECTANGLE and obj2.shape == shapes.RECTANGLE:
-            return rect2rectCollision(obj1, obj2)
-        elif obj1.shape == shapes.ELLIPSE and obj2.shape == shapes.ELLIPSE:
-            return ellipse2ellipseCollision(obj1, obj2)
-        elif obj1.shape == shapes.RECTANGLE and obj2.shape == shapes.ELLIPSE:
-            return rect2ellipseCollision(obj1, obj2)
-        elif obj1.shape == shapes.ELLIPSE and obj2.shape == shapes.RECTANGLE:
-            return rect2ellipseCollision(obj2, obj1)
+        proxies1 = Core._build_collision_proxies(obj1)
+        proxies2 = Core._build_collision_proxies(obj2)
+
+        for proxy1 in proxies1:
+            for proxy2 in proxies2:
+                if proxy1.shape == shapes.RECTANGLE and proxy2.shape == shapes.RECTANGLE:
+                    if rect2rectCollision(proxy1, proxy2):
+                        return True
+                elif proxy1.shape == shapes.ELLIPSE and proxy2.shape == shapes.ELLIPSE:
+                    if ellipse2ellipseCollision(proxy1, proxy2):
+                        return True
+                elif proxy1.shape == shapes.RECTANGLE and proxy2.shape == shapes.ELLIPSE:
+                    if rect2ellipseCollision(proxy1, proxy2):
+                        return True
+                elif proxy1.shape == shapes.ELLIPSE and proxy2.shape == shapes.RECTANGLE:
+                    if rect2ellipseCollision(proxy2, proxy1):
+                        return True
         return False
     def checkCollisionWithList(self, obj1: 'Core.object', obj2: List['Core.object']) -> bool:
         for obj in obj2:
@@ -461,6 +653,119 @@ class Core:
             else:
                 print(f"Message: {last_message} [x{last_message_count}]")
 
+    @staticmethod
+    def has_function(source, name) -> bool:
+        return Core._has_attr(source = source, attr_name = name, require_callable = True)
+    
+    @staticmethod
+    def has_variable(source, name) -> bool:
+        return Core._has_attr(source = source, attr_name = name, require_callable = False)
+
+    @staticmethod
+    def normalize(vector: Vector2 | list[float] | tuple[float, float]) -> Vector2:
+        if isinstance(vector, Vector2):
+            x, y = vector.x, vector.y
+        else:
+            x, y = vector
+        length = math.hypot(x, y)
+        if length == 0:
+            return Vector2(0.0, 0.0)
+        return Vector2(x / length, y / length)
+    
+    @staticmethod
+    def _has_attr(source, attr_name, *, require_callable: bool | None = None) -> bool:
+        if not hasattr(source, attr_name):
+            return False
+        value = getattr(source, attr_name)
+        if require_callable is True:
+            return callable(value)
+        if require_callable is False:
+            return not callable(value)
+        return True
+
+    @staticmethod
+    def _get_attr(source, attr_name, default=_MISSING):
+        if default is _MISSING:
+            return getattr(source, attr_name)
+        return getattr(source, attr_name, default)
+
+    @staticmethod
+    def _script_name(script):
+        if script is None:
+            return "<unknown>"
+        return getattr(script, '__qualname__', getattr(script, '__name__', getattr(script, '__class__', type(script)).__name__))
+
+    @staticmethod
+    def _log_script_exception(script, context: str, exc: Exception):
+        name = Core._script_name(script)
+        tb = ''.join(traceback.format_exception(type(exc), exc, exc.__traceback__))
+        Core.log_message(f"{context} ({name}) raised:\n{tb}", True)
+
+    @staticmethod
+    def _get_custom_colliders(obj):
+        colliders = []
+        for script in Core._get_attr(obj, 'scripts', []):
+            if not Core.has_function(script, 'getColliders'):
+                continue
+            try:
+                result = script.getColliders(obj)
+            except Exception as e:
+                Core._log_script_exception(script, 'script.getColliders', e)
+                continue
+            if not result:
+                continue
+            if isinstance(result, (list, tuple)):
+                colliders.extend(result)
+            else:
+                colliders.append(result)
+        return colliders
+
+    @staticmethod
+    def _normalize_collider_info(obj, info):
+        if isinstance(info, dict):
+            shape = info.get('shape', obj.shape)
+            offset = tuple(info.get('offset', (0, 0)))
+            size = info.get('size', obj.size)
+        else:
+            shape = getattr(info, 'shape', obj.shape)
+            offset = tuple(getattr(info, 'offset', (0, 0)))
+            size = getattr(info, 'size', obj.size)
+
+        size_value = None
+        if isinstance(size, (list, tuple)) and len(size) == 2:
+            size_value = [size[0], size[1]]
+        elif hasattr(size, 'copy'):
+            size_value = size.copy()
+        else:
+            size_value = [size, size]
+
+        return shape, offset, size_value
+
+    @staticmethod
+    def _build_collision_proxies(obj):
+        colliders = Core._get_custom_colliders(obj)
+        proxies = []
+        if not colliders:
+            proxies.append(SimpleNamespace(
+                shape=obj.shape,
+                position=obj.position.copy(),
+                size=obj.size.copy() if hasattr(obj.size, 'copy') else list(obj.size),
+                core=obj.core,
+                id=obj.id,
+            ))
+            return proxies
+
+        for idx, collider in enumerate(colliders):
+            shape, offset, size = Core._normalize_collider_info(obj, collider)
+            proxies.append(SimpleNamespace(
+                shape=shape,
+                position=[obj.position[0] + offset[0], obj.position[1] + offset[1]],
+                size=size,
+                core=obj.core,
+                id=f"{obj.id}:{idx}",
+            ))
+        return proxies
+
     def debugCollisions(self, shouldDebug: bool):
         global shouldDebugCollisions
         shouldDebugCollisions = shouldDebug
@@ -471,15 +776,41 @@ class Core:
         else:
             self.tickrate = tps
 
+    def clean_object_list(self, objects: list['Core.object']):
+        """Keep only objects that are still registered with this Core."""
+
+        if not objects:
+            return
+        active_objects = set(self._objects)
+        objects[:] = [obj for obj in objects if hasattr(obj, "core") and obj in active_objects]
+
     class object:
-        def __init__(self, core: 'Core', shape: 'shapes', color: list[int] | tuple[int, int, int] | tuple[int, int, int, int], position: list[float], size: list[float] | tuple[float, float], image: str | None = None):
+        def __init__(self, core: 'Core', shape: 'shapes', color: list[int] | tuple[int, int, int] | tuple[int, int, int, int], position: Vector2 | list[float] | tuple[float, float], size: list[float] | tuple[float, float], image: str | None = None, scripts: list | None = None, arguments: dict | None = None):
             self.core = core
             self.shape = shape
             self.color = color.copy() if hasattr(color, 'copy') else color  # For tuples which don't have copy()
-            self.position = position.copy()
-            self.original_position = position.copy()
+            normalized_position = Vector2(position)
+            self.position = normalized_position.copy()
+            self.original_position = normalized_position.copy()
             self.size = size.copy() if hasattr(size, 'copy') else size  # For tuples which don't have copy()
             self.image = image
+            self.arguments = arguments.copy() if arguments else {}
+
+            # script instances attached to this object; each script may implement ready(obj), update(obj), draw(screen, obj)
+            self.scripts: list = []
+
+            # register object with core
+            try:
+                if not hasattr(self.core, '_objects'):
+                    self.core._objects = []
+                self.core._objects.append(self)
+            except Exception:
+                pass
+
+            # if initial scripts provided, attach them
+            if scripts:
+                for s in scripts:
+                    self.attach_script(s)
 
             self.move_restrictions = (None, None)
 
@@ -507,6 +838,18 @@ class Core:
             # Core.log_message("drawing object at adjusted position: " + str(adjusted_position) + " with cameraSectionPosition: " + str(cameraSectionPosition) + " and original position: " + str(self.position) + " and screen size: " + str(self.core.screenSize) + " and shape: " + str(self.shape) + " with intermidiate level position screen size: " + str([cameraSectionPosition[0] * self.core.screenSize[0], cameraSectionPosition[1] * self.core.screenSize[1]]))
 
             loaded_image = None
+            # If this object uses CUSTOM shape, let attached scripts perform drawing
+            if self.shape == shapes.CUSTOM:
+                drew = False
+                for script in Core._get_attr(self, 'scripts', []):
+                    if hasattr(script, 'draw') and callable(script.draw):
+                        try:
+                            script.draw(screen, self)
+                            drew = True
+                        except Exception as e:
+                            Core._log_script_exception(script, 'script.draw', e)
+                if drew:
+                    return
             if(self.image is not None and self.shape == shapes.IMAGE and os.path.exists(os.path.join(os.path.dirname(__file__), '..', 'sprites', self.image))):
                 loaded_image = _load_image(os.path.join(os.path.dirname(__file__), '..', 'sprites', self.image))
 
@@ -549,7 +892,7 @@ class Core:
                             self.move(0, -stepY)  # Back out this step
 
         def set_position(self, x, y):
-            self.position = [x - (self.size[0] / 2), y - (self.size[1] / 2)]
+            self.position = Vector2(x - (self.size[0] / 2), y - (self.size[1] / 2))
 
         def reset_position(self, x: bool = True, y: bool = True):
             if x:
@@ -558,7 +901,75 @@ class Core:
                 self.position[1] = self.original_position[1]
 
         def destroy(self):
+            # unregister from core list if present
+            try:
+                if hasattr(self.core, '_objects') and self in self.core._objects:
+                    self.core._objects.remove(self)
+            except Exception:
+                pass
+            # clear scripts
+            try:
+                self.scripts.clear()
+            except Exception:
+                pass
             del self
+
+        def __instantiate_script(self, script_entry):
+            constructor = script_entry
+            raw_args = ()
+            raw_kwargs = {}
+            if isinstance(script_entry, dict):
+                constructor = script_entry.get('class') or script_entry.get('script') or constructor
+                raw_args = script_entry.get('args', ())
+                raw_kwargs = script_entry.get('kwargs', {})
+            elif isinstance(script_entry, (list, tuple)):
+                if len(script_entry) == 0:
+                    return None
+                constructor = script_entry[0]
+                raw_args = script_entry[1] if len(script_entry) > 1 else ()
+                raw_kwargs = script_entry[2] if len(script_entry) > 2 else {}
+
+            if isinstance(raw_args, dict):
+                raw_kwargs = raw_args
+                raw_args = ()
+
+            if isinstance(raw_args, (list, tuple)):
+                args = tuple(raw_args)
+            elif raw_args is None:
+                args = ()
+            else:
+                args = (raw_args,)
+
+            kwargs = dict(raw_kwargs) if isinstance(raw_kwargs, dict) else {}
+
+            if callable(constructor):
+                try:
+                    return constructor(*args, **kwargs)
+                except TypeError:
+                    return constructor
+            return constructor
+
+        def attach_script(self, script):
+            """Attach a script object to this object. Script may implement ready(obj), update(obj), draw(screen, obj)."""
+            if not hasattr(self, 'scripts'):
+                self.scripts = []
+            instance = script
+            if script is not None:
+                instance = self.__instantiate_script(script)
+            if instance is None:
+                return
+            try:
+                setattr(instance, 'object', self)
+                setattr(instance, 'core', self.core)
+            except Exception:
+                pass
+            self.scripts.append(instance)
+            # call ready lifecycle method if present
+            if hasattr(instance, 'ready') and callable(instance.ready):
+                try:
+                    instance.ready(self)
+                except Exception as e:
+                    Core._log_script_exception(instance, 'script.ready', e)
 
         def get_rect(self) -> pygame.Rect:
             return pygame.Rect(self.position[0], self.position[1], self.size[0], self.size[1])

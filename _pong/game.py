@@ -1,4 +1,4 @@
-from engine.core import Core, shapes
+from engine.core import Core, shapes, Vector2
 
 bounds = (900 * 2, 600 * 1.5)
 
@@ -6,8 +6,8 @@ core = Core(bounds, 1, "game title")
 
 pads = [
     {
-        "object": core.object(core, shapes.RECTANGLE, (255, 255, 255), [50, bounds[1] / 2 - 50], [25, 100]),
-        "speed": (0, 10 * (bounds[1] / 600)),
+        "object": core.object(core, shapes.RECTANGLE, (255, 255, 255), Vector2(50, bounds[1] / 2 - 50), [25, 100]),
+        "speed": Vector2(0, 10 * (bounds[1] / 600)),
         "controls": {
             "up": "w",
             "down": "s",
@@ -16,8 +16,8 @@ pads = [
         }
     },
     {
-        "object": core.object(core, shapes.RECTANGLE, (255, 255, 255), [bounds[0] - 75, bounds[1] / 2 - 50], [25, 100]),
-        "speed": (0, 10 * (bounds[1] / 600)),
+        "object": core.object(core, shapes.RECTANGLE, (255, 255, 255), Vector2(bounds[0] - 75, bounds[1] / 2 - 50), [25, 100]),
+        "speed": Vector2(0, 10 * (bounds[1] / 600)),
         "controls": {
             "up": "up",
             "down": "down",
@@ -30,10 +30,10 @@ pads = [
 pads[0]["object"].set_move_restriction(None, (0, bounds[1] - pads[0]["object"].size[1]))
 pads[1]["object"].set_move_restriction(None, (0, bounds[1] - pads[1]["object"].size[1]))
 
-pong = core.object(core, shapes.ELLIPSE, (255, 255, 255), [bounds[0] / 2, bounds[1] / 2], [25, 25])
+pong = core.object(core, shapes.ELLIPSE, (255, 255, 255), Vector2(bounds[0] / 2, bounds[1] / 2), [25, 25])
 pong_restrictions = ((0 + pong.size[0] / 2, bounds[0] - pong.size[0] / 2), (0 + pong.size[1] / 2, bounds[1] - pong.size[1] / 2))
 pong.set_move_restriction(pong_restrictions[0], pong_restrictions[1])
-pong_speed = (5 * (bounds[0] / 900), 5 * (bounds[1] / 600))
+pong_speed = Vector2(5 * (bounds[0] / 900), 5 * (bounds[1] / 600))
 
 player_scores = [0, 0]
 win_score = 10
@@ -50,32 +50,32 @@ def update():
         global pads, pong, pong_restrictions, pong_speed, win_score
 
         # player 1
-        current_move = [0, 0]
+        current_move = Vector2(0.0, 0.0)
         if core.isKeyPressed(pads[0]["controls"]["up"]):
-            current_move[1] -= pads[0]["speed"][1]
+            current_move.y -= pads[0]["speed"].y
         if core.isKeyPressed(pads[0]["controls"]["down"]):
-            current_move[1] += pads[0]["speed"][1]
+            current_move.y += pads[0]["speed"].y
         if core.isKeyPressed(pads[0]["controls"]["left"]):
-            current_move[0] -= pads[0]["speed"][0]
+            current_move.x -= pads[0]["speed"].x
         if core.isKeyPressed(pads[0]["controls"]["right"]):
-            current_move[0] += pads[0]["speed"][0]
+            current_move.x += pads[0]["speed"].x
 
-        pads[0]["object"].move(*current_move)
+        pads[0]["object"].move(current_move.x, current_move.y)
 
         # player 2
-        current_move = [0, 0]
+        current_move = Vector2(0.0, 0.0)
         if core.isKeyPressed(pads[1]["controls"]["up"]):
-            current_move[1] -= pads[1]["speed"][1]
+            current_move.y -= pads[1]["speed"].y
         if core.isKeyPressed(pads[1]["controls"]["down"]):
-            current_move[1] += pads[1]["speed"][1]
+            current_move.y += pads[1]["speed"].y
         if core.isKeyPressed(pads[1]["controls"]["left"]):
-            current_move[0] -= pads[1]["speed"][0]
+            current_move.x -= pads[1]["speed"].x
         if core.isKeyPressed(pads[1]["controls"]["right"]):
-            current_move[0] += pads[1]["speed"][0]
+            current_move.x += pads[1]["speed"].x
 
-        pads[1]["object"].move(*current_move)
+        pads[1]["object"].move(current_move.x, current_move.y)
 
-        pong.move(pong_speed[0], pong_speed[1])
+        pong.move(pong_speed.x, pong_speed.y)
 
         # control game speed
         if(core.isKeyPressed("plus")):
@@ -94,7 +94,7 @@ def update():
             player_scores[0] += 1
             if(player_scores[0] >= win_score):
                 current_scene = 2
-            pong_speed = (pong_speed[0] * -1, pong_speed[1])
+            pong_speed = Vector2(-pong_speed.x, pong_speed.y)
             pong.reset_position()
             core.log_message(f"Player 1 scored! Score: {player_scores[0]}")
         # hit left edge, player 2 scores
@@ -103,19 +103,19 @@ def update():
             player_scores[1] += 1
             if(player_scores[1] >= win_score):
                 current_scene = 2
-            pong_speed = (pong_speed[0] * -1, pong_speed[1])
+            pong_speed = Vector2(-pong_speed.x, pong_speed.y)
             pong.reset_position()
             core.log_message(f"Player 2 scored! Score: {player_scores[1]}")
 
         if(pong.position[1] >= pong_restrictions[1][1] or pong.position[1] <= pong_restrictions[1][0]):
-            pong_speed = (pong_speed[0], pong_speed[1] * -1)
+            pong_speed = Vector2(pong_speed.x, -pong_speed.y)
 
         # hit left pad: go right
         if(core.checkCollision(pong, pads[0]["object"])):
-            pong_speed = (abs(pong_speed[0]), pong_speed[1])
+            pong_speed = Vector2(abs(pong_speed.x), pong_speed.y)
         # hit right pad: go left
         if(core.checkCollision(pong, pads[1]["object"])):
-            pong_speed = (-abs(pong_speed[0]), pong_speed[1])
+            pong_speed = Vector2(-abs(pong_speed.x), pong_speed.y)
 
         pass
 
